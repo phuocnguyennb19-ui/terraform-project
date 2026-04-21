@@ -6,7 +6,7 @@ on:
     paths:
       - 'platform/**'
       - 'modules/**'
-      - 'platform_config.yml'
+      - 'config.yml'
   pull_request:
     branches: [ "master" ]
     paths:

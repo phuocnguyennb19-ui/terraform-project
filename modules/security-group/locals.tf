@@ -1,6 +1,6 @@
 locals {
   # 1. Base Config Loading
-  config_all = try(yamldecode(file("${path.module}/../../platform_config.yml")), {})
+  config_all = try(yamldecode(file("${path.module}/../../config.yml")), {})
 
   # 2. Local Module Config
   config_local = try(
