@@ -1,32 +1,179 @@
 locals {
-  # 1. Base Config Loading
-  config_all = try(yamldecode(file("${path.module}/../../config.yml")), {})
-  
-  # 2. Local Module Config
-  config_local = try(
-    yamldecode(file("${path.cwd}/config.yml")),
-    try(yamldecode(file("${path.cwd}/config.yaml")), {})
+
+  # 2. Local Module Config (Support dynamic config file name)
+  config_local = merge(
+    try(yamldecode(file("${path.cwd}/${var.config_file}")), {}),
+    var.manual_config
   )
 
-  # 3. Context
-  env      = try(local.config_all.global.environment, local.config_local.environment, "dev")
-  region   = try(local.config_all.global.region, "us-east-1")
-  project  = try(local.config_all.global.project, "SM-Platform")
-  profile  = try(local.config_all.global.aws_profile, "personal-dev")
-  app_name = try(local.config_local.app_name, "base")
-  service_type = try(local.config_local.service_type, "infra")
-  name_prefix = local.app_name == "base" ? "${local.env}-${local.project}" : "${local.env}-${local.app_name}-${local.service_type}"
+  # 3. Context & Naming (Strict mapping from config.yml)
+  env          = lookup(var.global_config, "environment", null)
+  region       = lookup(var.global_config, "region", null)
+  project      = lookup(var.global_config, "project", null)
+  app_name     = lookup(local.config_local, "app_name", null)
+  service_type = lookup(local.config_local, "service_type", "infra")
+  name_prefix  = local.app_name == "base" || local.app_name == null ? "${local.env}-${local.project}" : "${local.env}-${local.app_name}-${local.service_type}"
 
-  # 4. Smart Defaults for ecs-service
-  service_defaults = {
-    image = "nginx:latest"
-    cpu = 256
-    memory = 512
-    port = 80
+  # 4. Task Definition Mapping
+  raw_task_cfg = try(local.config_local.task_definition, {})
+  task_cfg = {
+    family                   = lookup(local.raw_task_cfg, "family", "${local.name_prefix}-task")
+    network_mode             = lookup(local.raw_task_cfg, "network_mode", "awsvpc")
+    requires_compatibilities = lookup(local.raw_task_cfg, "requires_compatibilities", ["FARGATE"])
+    cpu                      = lookup(local.raw_task_cfg, "cpu", try(local.config_local.cpu, null))
+    memory                   = lookup(local.raw_task_cfg, "memory", try(local.config_local.memory, null))
+    execution_role_arn       = lookup(local.raw_task_cfg, "execution_role_arn", null)
+    task_role_arn            = lookup(local.raw_task_cfg, "task_role_arn", null)
+    volumes                  = lookup(local.config_local, "volumes", [])
   }
-  service_config = merge(local.service_defaults, try(local.config_local.service, {}))
 
-  # 5. Global Alias
+  # 5. Container Definitions Mapping
+  containers_raw = lookup(local.config_local, "container_definitions", [
+    {
+      name      = "app"
+      image     = lookup(local.config_local, "image", null)
+      essential = true
+      port_mappings = [
+        {
+          container_port = lookup(local.config_local, "port", null)
+          host_port      = lookup(local.config_local, "port", null)
+          protocol       = "tcp"
+        }
+      ]
+    }
+  ])
+
+  # Normalize container definitions for the module
+  containers = {
+    for c in local.containers_raw : c.name => {
+      image     = c.image
+      essential = lookup(c, "essential", true)
+      cpu       = lookup(c, "cpu", null)
+      memory    = lookup(c, "memory", null)
+      command   = lookup(c, "command", [])
+
+      port_mappings = [
+        for p in try(c.port_mappings, []) : {
+          containerPort = p.container_port
+          hostPort      = lookup(p, "host_port", p.container_port)
+          protocol      = lookup(p, "protocol", "tcp")
+        }
+      ]
+
+      environment = [
+        for k, v in try(c.environment, {}) : {
+          name  = k
+          value = tostring(v)
+        }
+      ]
+
+      secrets = [
+        for k, v in try(c.secrets, {}) : {
+          name      = k
+          valueFrom = v
+        }
+      ]
+
+      log_configuration = lookup(c, "log_configuration", {
+        log_driver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/${local.name_prefix}"
+          awslogs-region        = local.region
+          awslogs-stream-prefix = c.name
+        }
+      })
+
+      mount_points = lookup(c, "mount_points", [])
+      depends_on   = lookup(c, "depends_on", [])
+    }
+  }
+
+  # 6. Service Configuration Mapping
+  raw_service_cfg = try(local.config_local.service, {})
+  service_cfg = {
+    desired_count                      = lookup(local.raw_service_cfg, "desired_count", 1)
+    deployment_maximum_percent         = lookup(local.raw_service_cfg, "deployment_maximum_percent", 200)
+    deployment_minimum_healthy_percent = lookup(local.raw_service_cfg, "deployment_minimum_healthy_percent", 100)
+
+    # LB Mapping
+    load_balancer = lookup(local.raw_service_cfg, "load_balancer", {
+      container_name = "app"
+      container_port = lookup(local.config_local, "port", null)
+    })
+
+    # Deployment & Runtime
+    health_check_grace_period  = lookup(local.raw_service_cfg, "health_check_grace_period", 0)
+    enable_execute_command     = lookup(local.raw_service_cfg, "enable_execute_command", false)
+    force_new_deployment       = lookup(local.raw_service_cfg, "force_new_deployment", false)
+    deployment_controller_type = lookup(local.raw_service_cfg, "deployment_controller_type", "ECS")
+    propagate_tags             = lookup(local.raw_service_cfg, "propagate_tags", "SERVICE")
+
+    # Network
+    subnet_ids         = lookup(lookup(try(local.raw_service_cfg.network_configuration.awsvpc_configuration, {}), "subnets", {}), "subnets", null)
+    security_group_ids = lookup(lookup(try(local.raw_service_cfg.network_configuration.awsvpc_configuration, {}), "security_groups", {}), "security_groups", null)
+  }
+
+  # 7. AutoScaling Mapping
+  raw_autoscaling_cfg = try(local.config_local.autoscaling, {})
+  autoscaling_cfg = {
+    enabled                   = lookup(local.raw_autoscaling_cfg, "enabled", false)
+    min_capacity              = lookup(local.raw_autoscaling_cfg, "min_capacity", 1)
+    max_capacity              = lookup(local.raw_autoscaling_cfg, "max_capacity", 3)
+    target_cpu_utilization    = lookup(local.raw_autoscaling_cfg, "target_cpu_utilization", 0)
+    target_memory_utilization = lookup(local.raw_autoscaling_cfg, "target_memory_utilization", 0)
+  }
+
+  autoscaling_policies = merge(
+    local.autoscaling_cfg.target_cpu_utilization > 0 ? {
+      cpu = {
+        policy_type = "TargetTrackingScaling"
+        target_tracking_scaling_policy_configuration = {
+          predefined_metric_specification = {
+            predefined_metric_type = "ECSServiceAverageCPUUtilization"
+          }
+          target_value = local.autoscaling_cfg.target_cpu_utilization
+        }
+      }
+    } : {},
+    local.autoscaling_cfg.target_memory_utilization > 0 ? {
+      memory = {
+        policy_type = "TargetTrackingScaling"
+        target_tracking_scaling_policy_configuration = {
+          predefined_metric_specification = {
+            predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+          }
+          target_value = local.autoscaling_cfg.target_memory_utilization
+        }
+      }
+    } : {}
+  )
+
+  # 8. Security Group Rules (Dynamic - Using For loop to ensure type consistency)
+  ecs_sg_rules = {
+    for k, v in {
+      alb_ingress = {
+        type        = "ingress"
+        from_port   = lookup(local.service_cfg.load_balancer, "container_port", 80)
+        to_port     = lookup(local.service_cfg.load_balancer, "container_port", 80)
+        protocol    = "tcp"
+        description = "Allow traffic from ALB"
+        cidr_blocks = [try(var.vpc_cidr_block, "10.0.0.0/16")]
+      }
+      egress_all = {
+        type        = "egress"
+        from_port   = 0
+        to_port     = 0
+        protocol    = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+      }
+    } : k => v if local.service_cfg.security_group_ids == null
+  }
+
+  # 9. Global Alias & Tags
   config = local.config_local
-  tags   = { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" }
+  tags = merge(
+    { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" },
+    var.tags,
+    try(var.global_config.tags, {})
+  )
 }

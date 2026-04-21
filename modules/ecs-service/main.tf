@@ -1,107 +1,106 @@
-# =============================================================================
-# ECS SERVICE MODULE — ORCHESTRATION MODE
-# Nhận toàn bộ thông tin từ Master Engine qua variables.
-# Không phụ thuộc vào Remote State.
-# =============================================================================
+# Chuẩn hóa: Sử dụng module cho Target Group & Listener Rule
+module "lb_resources" {
+  source  = "terraform-aws-modules/alb/aws"
+  version = "~> 8.0"
 
-# --- Target Group ---
-resource "aws_lb_target_group" "this" {
-  count = try(local.service_config.lb_type, "") != "none" && try(local.service_config.lb_type, "") != "" ? 1 : 0
+  create_lb = false
 
-  name        = "${local.name_prefix}-tg"
-  port        = try(local.service_config.port, 80)
-  protocol    = "HTTP"
-  vpc_id      = var.vpc_id
-  target_type = "ip"
+  target_groups = [
+    {
+      name_prefix      = "h"
+      backend_protocol = "HTTP"
+      backend_port     = lookup(local.service_cfg.load_balancer, "container_port", 80)
+      target_type      = "ip"
+      health_check = {
+        enabled             = true
+        path                = lookup(local.service_cfg, "health_check_path", "/")
+        healthy_threshold   = 2
+        unhealthy_threshold = 3
+        timeout             = 5
+        interval            = 30
+        matcher             = "200"
+      }
+    }
+  ]
 
-  health_check {
-    path                = try(local.service_config.health_check_path, "/")
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-    timeout             = 5
-    interval            = 30
-    matcher             = "200"
-  }
+  http_tcp_listener_rules = var.listener_arn != null && var.listener_arn != "" ? [
+    {
+      http_listener_arn = var.listener_arn
+      priority          = lookup(local.service_cfg, "priority", 100)
+      actions = [
+        {
+          type               = "forward"
+          target_group_index = 0
+        }
+      ]
+      conditions = [
+        {
+          host_headers = [lookup(local.service_cfg, "host_header", "${local.app_name}.${local.env}.internal")]
+        }
+      ]
+    }
+  ] : []
 
   tags = local.tags
 }
 
-# --- Listener Rule (Auto-attachment to ALB) ---
-resource "aws_lb_listener_rule" "this" {
-  count = try(local.service_config.lb_type, "") == "alb" ? 1 : 0
-
-  listener_arn = var.listener_arn
-  priority     = try(local.service_config.priority, 100)
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.this[0].arn
-  }
-
-  condition {
-    host_header {
-      values = [try(local.service_config.host_header, "${local.app_name}.${local.env}.internal")]
-    }
-  }
-}
-
 # --- ECS Service ---
-module "service" {
-  source = "git::https://github.com/terraform-aws-modules/terraform-aws-ecs.git//modules/service?ref=v5.11.2"
+module "ecs_service" {
+  source = "git::https://github.com/terraform-aws-modules/terraform-aws-ecs.git//modules/service?ref=v5.11.4"
 
   name        = local.name_prefix
   cluster_arn = var.cluster_arn
 
-  cpu    = try(local.service_config.cpu, 256)
-  memory = try(local.service_config.memory, 512)
+  # Task Level Configuration
+  cpu                      = local.task_cfg.cpu
+  memory                   = local.task_cfg.memory
+  network_mode             = local.task_cfg.network_mode
+  requires_compatibilities = local.task_cfg.requires_compatibilities
 
-  desired_count                      = try(local.service_config.desired_count, 1)
-  deployment_maximum_percent         = try(local.service_config.deployment_maximum_percent, 200)
-  deployment_minimum_healthy_percent = try(local.service_config.deployment_minimum_healthy_percent, 100)
+  task_exec_iam_role_arn = local.task_cfg.execution_role_arn
+  tasks_iam_role_arn     = local.task_cfg.task_role_arn
 
-  container_definitions = {
-    app = {
-      image     = var.image_tag != "" ? "${split(":", try(local.service_config.image, "nginx:latest"))[0]}:${var.image_tag}" : try(local.service_config.image, "nginx:latest")
-      essential = true
-      port_mappings = [
-        {
-          containerPort = try(local.service_config.port, 80)
-          hostPort      = try(local.service_config.port, 80)
-          protocol      = "tcp"
-        }
-      ]
-    }
-  }
+  # Container Definitions
+  container_definitions = local.containers
 
-  # Network — nhận từ orchestrator
-  subnet_ids = var.private_subnets
+  # Volumes
+  volume = local.task_cfg.volumes
 
-  security_group_rules = {
-    alb_ingress = {
-      type        = "ingress"
-      from_port   = try(local.service_config.port, 80)
-      to_port     = try(local.service_config.port, 80)
-      protocol    = "tcp"
-      description = "Allow traffic from ALB"
-      cidr_blocks = [try(var.vpc_cidr_block, "10.0.0.0/16")]
-    }
-    egress_all = {
-      type        = "egress"
-      from_port   = 0
-      to_port     = 0
-      protocol    = "-1"
-      cidr_blocks = ["0.0.0.0/0"]
-    }
-  }
+  # Service Level Configuration
+  desired_count                      = local.service_cfg.desired_count
+  deployment_maximum_percent         = local.service_cfg.deployment_maximum_percent
+  deployment_minimum_healthy_percent = local.service_cfg.deployment_minimum_healthy_percent
 
-  # Load Balancer Attachment
-  load_balancer = length(aws_lb_target_group.this) > 0 ? {
+  # Network
+  subnet_ids         = local.service_cfg.subnet_ids != null ? local.service_cfg.subnet_ids : var.private_subnets
+  security_group_ids = local.service_cfg.security_group_ids != null ? local.service_cfg.security_group_ids : null
+
+  # Tự động tạo SG rules nếu không truyền security_group_ids
+  create_security_group = local.service_cfg.security_group_ids == null
+  security_group_rules  = local.ecs_sg_rules
+
+  # Load Balancer Attachment (Dùng ARN từ module target_group)
+  load_balancer = lookup(local.service_cfg.load_balancer, "container_name", "") != "" ? {
     service = {
-      target_group_arn = aws_lb_target_group.this[0].arn
-      container_name   = "app"
-      container_port   = try(local.service_config.port, 80)
+      target_group_arn = module.lb_resources.target_group_arns[0]
+      container_name   = local.service_cfg.load_balancer.container_name
+      container_port   = local.service_cfg.load_balancer.container_port
     }
   } : {}
+
+  # Runtime & Deployment Configuration
+  health_check_grace_period_seconds = local.service_cfg.health_check_grace_period
+  enable_execute_command            = local.service_cfg.enable_execute_command
+  force_new_deployment              = local.service_cfg.force_new_deployment
+  # deployment_controller_type is removed or changed in some v5 versions, using standard AWS argument if module doesn't expose it
+  # deployment_controller = { type = local.service_cfg.deployment_controller_type }
+  propagate_tags = local.service_cfg.propagate_tags
+
+  # AutoScaling tích hợp (Integrated)
+  enable_autoscaling       = local.autoscaling_cfg.enabled
+  autoscaling_min_capacity = local.autoscaling_cfg.min_capacity
+  autoscaling_max_capacity = local.autoscaling_cfg.max_capacity
+  autoscaling_policies     = local.autoscaling_policies
 
   tags = local.tags
 }

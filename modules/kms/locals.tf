@@ -1,30 +1,33 @@
 locals {
-  # 1. Base Config Loading
-  config_all = try(yamldecode(file("${path.module}/../../config.yml")), {})
-  
-  # 2. Local Module Config
-  config_local = try(
-    yamldecode(file("${path.cwd}/config.yml")),
-    try(yamldecode(file("${path.cwd}/config.yaml")), {})
+
+  # 2. Local Module Config (Support dynamic config file name)
+  config_local = merge(
+    try(yamldecode(file("${path.cwd}/${var.config_file}")), {}),
+    var.manual_config
   )
 
-  # 3. Context
-  env      = try(local.config_all.global.environment, local.config_local.environment, "dev")
-  region   = try(local.config_all.global.region, "us-east-1")
-  project  = try(local.config_all.global.project, "SM-Platform")
-  profile  = try(local.config_all.global.aws_profile, "personal-dev")
-  app_name = try(local.config_local.app_name, "base")
-  service_type = try(local.config_local.service_type, "infra")
-  name_prefix = local.app_name == "base" ? "${local.env}-${local.project}" : "${local.env}-${local.app_name}-${local.service_type}"
+  # 3. Context & Naming (Strict mapping from config.yml)
+  env          = lookup(var.global_config, "environment", null)
+  region       = lookup(var.global_config, "region", null)
+  project      = lookup(var.global_config, "project", null)
+  app_name     = lookup(local.config_local, "app_name", null)
+  service_type = lookup(local.config_local, "service_type", "infra")
+  name_prefix  = local.app_name == "base" || local.app_name == null ? "${local.env}-${local.project}" : "${local.env}-${local.app_name}-${local.service_type}"
 
   # 4. Smart Defaults for kms
   kms_defaults = {
-    alias = "alias/${local.name_prefix}-key"
-    description = "Master key"
+    aliases                 = lookup(local.config_local.kms, "aliases", ["alias/${local.name_prefix}-key"])
+    description             = lookup(local.config_local.kms, "description", "Master key for ${local.name_prefix}")
+    deletion_window_in_days = lookup(local.config_local.kms, "deletion_window_in_days", 7)
+    key_users               = lookup(local.config_local.kms, "key_users", [])
+    key_administrators      = lookup(local.config_local.kms, "key_administrators", [])
   }
   kms_config = merge(local.kms_defaults, try(local.config_local.kms, {}))
 
-  # 5. Global Alias
+  # 5. Global Alias & Tags
   config = local.config_local
-  tags   = { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" }
+  tags = merge(
+    { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" },
+    var.tags, try(var.global_config.tags, {})
+  )
 }
