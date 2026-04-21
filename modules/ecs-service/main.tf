@@ -61,7 +61,7 @@ module "service" {
 
   container_definitions = {
     app = {
-      image     = try(local.service_config.image, "nginx:latest")
+      image     = var.image_tag != "" ? "${split(":", try(local.service_config.image, "nginx:latest"))[0]}:${var.image_tag}" : try(local.service_config.image, "nginx:latest")
       essential = true
       port_mappings = [
         {

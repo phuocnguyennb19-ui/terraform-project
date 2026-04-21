@@ -39,3 +39,9 @@ variable "target_group_arn" {
   type        = string
   default     = null
 }
+
+variable "image_tag" {
+  description = "Tag của image container (ví dụ: v1.0.0)"
+  type        = string
+  default     = ""
+}
