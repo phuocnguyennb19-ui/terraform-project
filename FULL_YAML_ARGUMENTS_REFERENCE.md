@@ -65,17 +65,55 @@ Tài liệu này cung cấp danh sách **đầy đủ** các tham số có thể
 
 ---
 
-## 🔑 6. IAM (Key: `iam`)
-| YAML Key | Kiểu dữ liệu | Mặc định | Mô tả |
-|----------|-------------|----------|-------|
-| `role_name` | string | `${prefix}-role`| Tên Role. |
-| `trusted_role_services`| list | `[...]` | Service được dùng Role. |
-| `custom_role_policy_arns`| list | `[]` | Managed Policies gán thêm. |
-| `assume_role_policy` | string/map | `null` | Tùy chỉnh Trust Relationship Policy. |
+## 🔑 6. IAM (Key: `iam`) - Factory Spec
+> [!IMPORTANT]
+> IAM đã được chuyển sang mô hình Factory. Bạn có thể tạo nhiều tài nguyên cùng lúc.
+
+| YAML Key | Kiểu dữ liệu | Mô tả |
+|----------|-------------|-------|
+| `policies` | map | Map các managed policies cần tạo (key là tên policy). |
+| `roles` | map | Map các roles cần tạo (key là tên role). |
+| `groups` | map | Map các groups cần tạo. |
+| `users` | map | Map các users cần tạo. |
+
+**Ví dụ Role lồng Policy:**
+```yaml
+iam:
+  policies:
+    my-app-policy:
+      policy: |
+        { "Version": "2012-10-17", "Statement": [...] }
+  roles:
+    app-task-role:
+      trusted_role_services: ["ecs-tasks.amazonaws.com"]
+      custom_policy_names: ["my-app-policy"] # Tự động gắn policy vừa tạo vào role này
+```
 
 ---
 
-## 🖼️ 7. ECR Registry (Key: `ecr`)
+## 📊 7. CloudWatch (Key: `cloudwatch`)
+| YAML Key | Kiểu dữ liệu | Mô tả |
+|----------|-------------|-------|
+| `log_groups` | map | Tạo các CloudWatch Log Groups. |
+| `metric_alarms`| map | Cấu hình các cảnh báo (Alarms). |
+
+---
+
+## 📩 8. Messaging (Keys: `sqs`, `sns`)
+- **SQS**: Cấu hình hàng đợi qua key `queues`.
+- **SNS**: Cấu hình topics qua key `topics`.
+
+---
+
+## ⚡ 9. DynamoDB (Key: `dynamodb`)
+| YAML Key | Kiểu dữ liệu | Mô tả |
+|----------|-------------|-------|
+| `tables` | map | Danh sách các bảng NoSQL cần tạo (key là tên bảng). |
+| `hash_key` | string | Field khóa chính. |
+
+---
+
+## 🖼️ 10. ECR Registry (Key: `ecr`)
 | YAML Key | Kiểu dữ liệu | Mặc định | Mô tả |
 |----------|-------------|----------|-------|
 | `repository_names` | list | `[...]` | Danh sách repos sẽ tạo. |

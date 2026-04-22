@@ -1,5 +1,8 @@
 module "s3_bucket" {
   source = "git::https://github.com/terraform-aws-modules/terraform-aws-s3-bucket.git?ref=v4.2.1"
+  
+  # Security Enforcements
+  force_destroy = false
 
   bucket = local.s3_config.bucket
   acl    = "private"

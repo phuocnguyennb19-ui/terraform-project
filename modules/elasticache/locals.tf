@@ -33,7 +33,12 @@ locals {
   # 5. Global Alias & Tags
   config = local.config_local
   tags = merge(
-    { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" },
+    { 
+      Environment = local.env, 
+      Project     = local.project, 
+      ManagedBy   = "DylanDevOps",
+      Terraform   = "true" 
+    },
     var.tags, try(var.global_config.tags, {})
   )
 }

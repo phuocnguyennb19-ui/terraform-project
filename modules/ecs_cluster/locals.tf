@@ -14,15 +14,21 @@ locals {
   service_type = lookup(local.config_local, "service_type", "infra")
   name_prefix  = local.app_name == "base" || local.app_name == null ? "${local.env}-${local.project}" : "${local.env}-${local.app_name}-${local.service_type}"
 
-  # 4. Smart Defaults for kms
-  kms_defaults = {
-    aliases                 = lookup(local.config_local.kms, "aliases", ["alias/${local.name_prefix}-key"])
-    description             = lookup(local.config_local.kms, "description", "Master key for ${local.name_prefix}")
-    deletion_window_in_days = lookup(local.config_local.kms, "deletion_window_in_days", 7)
-    key_users               = lookup(local.config_local.kms, "key_users", [])
-    key_administrators      = lookup(local.config_local.kms, "key_administrators", [])
+  # 4. Smart Mapping for ecs/ecs_cluster
+  raw_ecs_config = merge(
+    try(local.config_local.ecs, {}),
+    try(local.config_local.ecs_cluster, {})
+  )
+
+  ecs_defaults = {
+    cluster_name        = "${local.name_prefix}-cluster"
+    container_insights  = lookup(local.raw_ecs_config, "container_insights", true)
+    kms_key_id          = lookup(local.raw_ecs_config, "kms_key_id", null)
+    fargate_weight      = lookup(local.raw_ecs_config, "fargate_weight", 100)
+    fargate_base        = lookup(local.raw_ecs_config, "fargate_base", 0)
+    fargate_spot_weight = lookup(local.raw_ecs_config, "fargate_spot_weight", 0)
   }
-  kms_config = merge(local.kms_defaults, try(local.config_local.kms, {}))
+  ecs_config = merge(local.ecs_defaults, local.raw_ecs_config)
 
   # 5. Global Alias & Tags
   config = local.config_local

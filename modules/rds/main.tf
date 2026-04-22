@@ -60,7 +60,11 @@ module "db" {
   performance_insights_enabled    = local.rds_config.performance_insights_enabled
   monitoring_interval             = local.rds_config.monitoring_interval
   enabled_cloudwatch_logs_exports = local.rds_config.enabled_cloudwatch_logs_exports
-  deletion_protection             = local.rds_config.deletion_protection
+  
+  # Security Enforcements
+  storage_encrypted   = true
+  publicly_accessible = false
+  deletion_protection = local.env == "prod" ? true : lookup(local.rds_config, "deletion_protection", false)
 
   tags = local.tags
 }

@@ -15,23 +15,28 @@ locals {
   name_prefix  = local.app_name == "base" || local.app_name == null ? "${local.env}-${local.project}" : "${local.env}-${local.app_name}-${local.service_type}"
 
   # 4. Security Group Configuration
+  raw_sg_cfg = try(local.config_local.security_group, {})
   sg_defaults = {
     name                     = "${local.name_prefix}-sg"
-    description              = lookup(local.config_local.security_group, "description", "Security group managed by Terraform")
+    description              = try(local.raw_sg_cfg.description, "Security group managed by Terraform")
     vpc_id                   = var.vpc_id
-    ingress_rules            = lookup(local.config_local.security_group, "ingress_rules", [])
-    ingress_cidr_blocks      = lookup(local.config_local.security_group, "ingress_cidr_blocks", ["0.0.0.0/0"])
-    ingress_with_cidr_blocks = lookup(local.config_local.security_group, "ingress_with_cidr_blocks", [])
-    egress_rules             = lookup(local.config_local.security_group, "egress_rules", ["all-all"])
-    egress_cidr_blocks       = lookup(local.config_local.security_group, "egress_cidr_blocks", ["0.0.0.0/0"])
+    ingress_rules            = try(local.raw_sg_cfg.ingress_rules, [])
+    ingress_cidr_blocks      = try(local.raw_sg_cfg.ingress_cidr_blocks, [])
+    ingress_with_cidr_blocks = try(local.raw_sg_cfg.ingress_with_cidr_blocks, [])
+    egress_rules             = try(local.raw_sg_cfg.egress_rules, ["all-all"])
+    egress_cidr_blocks       = try(local.raw_sg_cfg.egress_cidr_blocks, ["0.0.0.0/0"])
   }
   sg_config = merge(local.sg_defaults, try(local.config_local.security_group, {}))
 
   # 5. Global Alias & Tags
   config = local.config_local
   tags = merge(
-    { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" },
-    var.tags, try(var.global_config.tags, {}),
-    var.tags
+    { 
+      Environment = local.env, 
+      Project     = local.project, 
+      ManagedBy   = "DylanDevOps",
+      Terraform   = "true" 
+    },
+    var.tags, try(var.global_config.tags, {})
   )
 }

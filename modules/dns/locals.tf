@@ -14,19 +14,21 @@ locals {
   service_type = lookup(local.config_local, "service_type", "infra")
   name_prefix  = local.app_name == "base" || local.app_name == null ? "${local.env}-${local.project}" : "${local.env}-${local.app_name}-${local.service_type}"
 
-  # 4. Smart Defaults for secrets-manager
-  secrets_manager_defaults = {
-    name                    = "${local.name_prefix}-secret"
-    description             = lookup(local.config_local.secrets_manager, "description", "Secret managed by Terraform for ${local.name_prefix}")
-    recovery_window_in_days = lookup(local.config_local.secrets_manager, "recovery_window_in_days", 7)
-    kms_key_id              = lookup(local.config_local.secrets_manager, "kms_key_id", null)
+  # 4. Route53 Config (Full-Spec)
+  dns_defaults = {
+    zones = lookup(local.config_local.dns, "zones", lookup(local.config_local.route53, "zones", {}))
   }
-  secrets_manager_config = merge(local.secrets_manager_defaults, try(local.config_local.secrets_manager, {}))
+  dns_config = merge(local.dns_defaults, try(local.config_local.dns, local.config_local.route53, {}))
 
-  # 5. Global Alias & Tags
+  # 6. Global Alias & Tags
   config = local.config_local
   tags = merge(
-    { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" },
+    { 
+      Environment = local.env, 
+      Project     = local.project, 
+      ManagedBy   = "DylanDevOps",
+      Terraform   = "true" 
+    },
     var.tags, try(var.global_config.tags, {})
   )
 }

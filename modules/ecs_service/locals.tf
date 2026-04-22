@@ -14,43 +14,52 @@ locals {
   service_type = lookup(local.config_local, "service_type", "infra")
   name_prefix  = local.app_name == "base" || local.app_name == null ? "${local.env}-${local.project}" : "${local.env}-${local.app_name}-${local.service_type}"
 
-  # 4. Task Definition Mapping
-  raw_task_cfg = try(local.config_local.task_definition, {})
+  # 4. Smart Mapping for service
+  raw_service_cfg = merge(
+    try(local.config_local.service, {}),
+    try(local.config_local.ecs_service, {})
+  )
+
+  # 4. Task Definition Mapping (Prefer nested, fallback to root)
+  raw_task_cfg = merge(
+    try(local.raw_service_cfg.task_definition, {}),
+    try(local.config_local.task_definition, {})
+  )
   task_cfg = {
-    family                   = lookup(local.raw_task_cfg, "family", "${local.name_prefix}-task")
-    network_mode             = lookup(local.raw_task_cfg, "network_mode", "awsvpc")
-    requires_compatibilities = lookup(local.raw_task_cfg, "requires_compatibilities", ["FARGATE"])
-    cpu                      = lookup(local.raw_task_cfg, "cpu", try(local.config_local.cpu, null))
-    memory                   = lookup(local.raw_task_cfg, "memory", try(local.config_local.memory, null))
-    execution_role_arn       = lookup(local.raw_task_cfg, "execution_role_arn", null)
-    task_role_arn            = lookup(local.raw_task_cfg, "task_role_arn", null)
-    volumes                  = lookup(local.config_local, "volumes", [])
+    family                   = try(local.raw_task_cfg.family, "${local.name_prefix}-task")
+    network_mode             = try(local.raw_task_cfg.network_mode, "awsvpc")
+    requires_compatibilities = try(local.raw_task_cfg.requires_compatibilities, ["FARGATE"])
+    cpu                      = try(local.raw_task_cfg.cpu, try(local.raw_service_cfg.cpu, 256))
+    memory                   = try(local.raw_task_cfg.memory, try(local.raw_service_cfg.memory, 512))
+    execution_role_arn       = try(local.raw_task_cfg.execution_role_arn, null)
+    task_role_arn            = try(local.raw_task_cfg.task_role_arn, null)
+    volumes                  = try(local.raw_service_cfg.volumes, try(local.config_local.volumes, []))
   }
 
-  # 5. Container Definitions Mapping
-  containers_raw = lookup(local.config_local, "container_definitions", [
+  # 5. Container Definitions Mapping (Prefer nested, fallback to root)
+  containers_raw = lookup(local.raw_service_cfg, "container_definitions", lookup(local.config_local, "container_definitions", [
     {
       name      = "app"
-      image     = lookup(local.config_local, "image", null)
+      image     = lookup(local.raw_service_cfg, "image", lookup(local.config_local, "image", null))
       essential = true
       port_mappings = [
         {
-          container_port = lookup(local.config_local, "port", null)
-          host_port      = lookup(local.config_local, "port", null)
+          container_port = lookup(local.raw_service_cfg, "port", lookup(local.config_local, "port", null))
+          host_port      = lookup(local.raw_service_cfg, "port", lookup(local.config_local, "port", null))
           protocol       = "tcp"
         }
       ]
     }
-  ])
+  ]))
 
   # Normalize container definitions for the module
   containers = {
     for c in local.containers_raw : c.name => {
       image     = c.image
-      essential = lookup(c, "essential", true)
-      cpu       = lookup(c, "cpu", null)
-      memory    = lookup(c, "memory", null)
-      command   = lookup(c, "command", [])
+      essential = try(c.essential, true)
+      cpu       = try(c.cpu, null)
+      memory    = try(c.memory, null)
+      command   = try(c.command, [])
 
       port_mappings = [
         for p in try(c.port_mappings, []) : {
@@ -89,24 +98,23 @@ locals {
   }
 
   # 6. Service Configuration Mapping
-  raw_service_cfg = try(local.config_local.service, {})
   service_cfg = {
-    desired_count                      = lookup(local.raw_service_cfg, "desired_count", 1)
-    deployment_maximum_percent         = lookup(local.raw_service_cfg, "deployment_maximum_percent", 200)
-    deployment_minimum_healthy_percent = lookup(local.raw_service_cfg, "deployment_minimum_healthy_percent", 100)
+    desired_count                      = try(local.raw_service_cfg.desired_count, 1)
+    deployment_maximum_percent         = try(local.raw_service_cfg.deployment_maximum_percent, 200)
+    deployment_minimum_healthy_percent = try(local.raw_service_cfg.deployment_minimum_healthy_percent, 100)
 
     # LB Mapping
-    load_balancer = lookup(local.raw_service_cfg, "load_balancer", {
+    load_balancer = try(local.raw_service_cfg.load_balancer, {
       container_name = "app"
-      container_port = lookup(local.config_local, "port", null)
+      container_port = try(local.raw_service_cfg.port, try(local.config_local.port, null))
     })
 
     # Deployment & Runtime
-    health_check_grace_period  = lookup(local.raw_service_cfg, "health_check_grace_period", 0)
-    enable_execute_command     = lookup(local.raw_service_cfg, "enable_execute_command", false)
-    force_new_deployment       = lookup(local.raw_service_cfg, "force_new_deployment", false)
-    deployment_controller_type = lookup(local.raw_service_cfg, "deployment_controller_type", "ECS")
-    propagate_tags             = lookup(local.raw_service_cfg, "propagate_tags", "SERVICE")
+    health_check_grace_period  = try(local.raw_service_cfg.health_check_grace_period, 30)
+    enable_execute_command     = try(local.raw_service_cfg.enable_execute_command, false)
+    force_new_deployment       = try(local.raw_service_cfg.force_new_deployment, false)
+    deployment_controller_type = try(local.raw_service_cfg.deployment_controller_type, "ECS")
+    propagate_tags             = try(local.raw_service_cfg.propagate_tags, "SERVICE")
 
     # Network
     subnet_ids         = lookup(lookup(try(local.raw_service_cfg.network_configuration.awsvpc_configuration, {}), "subnets", {}), "subnets", null)
@@ -172,7 +180,12 @@ locals {
   # 9. Global Alias & Tags
   config = local.config_local
   tags = merge(
-    { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" },
+    { 
+      Environment = local.env, 
+      Project     = local.project, 
+      ManagedBy   = "DylanDevOps",
+      Terraform   = "true" 
+    },
     var.tags,
     try(var.global_config.tags, {})
   )

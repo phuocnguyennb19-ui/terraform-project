@@ -92,8 +92,12 @@ module "ecs_service" {
   health_check_grace_period_seconds = local.service_cfg.health_check_grace_period
   enable_execute_command            = local.service_cfg.enable_execute_command
   force_new_deployment              = local.service_cfg.force_new_deployment
-  # deployment_controller_type is removed or changed in some v5 versions, using standard AWS argument if module doesn't expose it
-  # deployment_controller = { type = local.service_cfg.deployment_controller_type }
+  
+  deployment_circuit_breaker = {
+    enable   = true
+    rollback = true
+  }
+
   propagate_tags = local.service_cfg.propagate_tags
 
   # AutoScaling tích hợp (Integrated)

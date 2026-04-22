@@ -19,7 +19,7 @@ locals {
     name                       = "${local.name_prefix}-alb"
     internal                   = lookup(local.config_local.alb, "internal", false)
     idle_timeout               = lookup(local.config_local.alb, "idle_timeout", 60)
-    enable_deletion_protection = lookup(local.config_local.alb, "enable_deletion_protection", false)
+    enable_deletion_protection = lookup(local.config_local.alb, "enable_deletion_protection", local.env == "prod")
     drop_invalid_header_fields = lookup(local.config_local.alb, "drop_invalid_header_fields", true)
   }
   alb_config = merge(local.alb_defaults, try(local.config_local.alb, {}))
@@ -63,7 +63,12 @@ locals {
   # 5. Global Alias & Tags
   config = local.config_local
   tags = merge(
-    { Environment = local.env, Project = local.project, ManagedBy = "DylanDevOps" },
+    { 
+      Environment = local.env, 
+      Project     = local.project, 
+      ManagedBy   = "DylanDevOps",
+      Terraform   = "true" 
+    },
     var.tags, try(var.global_config.tags, {})
   )
 }
