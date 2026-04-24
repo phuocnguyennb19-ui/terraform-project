@@ -31,7 +31,7 @@ locals {
     { 
       Environment = local.env, 
       Project     = local.project, 
-      ManagedBy   = "DylanDevOps",
+      ManagedBy   = lookup(var.global_config, "managed_by", "DylanDevOps"),
       Terraform   = "true" 
     },
     var.tags, try(var.global_config.tags, {})
